@@ -18,6 +18,7 @@ package org.apache.nifi.processors.standard;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -29,6 +30,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
@@ -89,6 +92,8 @@ public class SplitContent extends AbstractProcessor {
     static final AllowableValue TRAILING_POSITION = new AllowableValue("Trailing", "Trailing", "Keep the Byte Sequence at the end of the first split if <Keep Byte Sequence> is true");
     static final AllowableValue LEADING_POSITION = new AllowableValue("Leading", "Leading", "Keep the Byte Sequence at the beginning of the second split if <Keep Byte Sequence> is true");
 
+    static final AllowableValue REGEX_FORMAT = new AllowableValue("Regex", "Regex", "Java Regular Expression");
+
     public static final PropertyDescriptor FORMAT = new PropertyDescriptor.Builder()
             .name("Byte Sequence Format")
             .description("Specifies how the <Byte Sequence> property should be interpreted")
@@ -118,6 +123,14 @@ public class SplitContent extends AbstractProcessor {
             .defaultValue(TRAILING_POSITION.getValue())
             .build();
 
+    public static final PropertyDescriptor REGEX = new PropertyDescriptor.Builder()
+            .name("Regular Expression")
+            .description("Java Regular expression defining the pattern used to start a new line")
+            .required(true)
+            .allowableValues(REGEX_FORMAT)
+            .defaultValue(null)
+            .build();
+
     public static final Relationship REL_SPLITS = new Relationship.Builder()
             .name("splits")
             .description("All Splits will be routed to the splits relationship")
@@ -132,6 +145,10 @@ public class SplitContent extends AbstractProcessor {
 
     private final AtomicReference<byte[]> byteSequence = new AtomicReference<>();
 
+    // Not sure if AtomicReference is necessary. But following the pattern
+    private final AtomicReference<String> regex = new AtomicReference<>();
+    private final AtomicReference<Pattern> regexPattern = new AtomicReference<>();
+
     @Override
     protected void init(final ProcessorInitializationContext context) {
         final Set<Relationship> relationships = new HashSet<>();
@@ -144,6 +161,7 @@ public class SplitContent extends AbstractProcessor {
         properties.add(BYTE_SEQUENCE);
         properties.add(KEEP_SEQUENCE);
         properties.add(BYTE_SEQUENCE_LOCATION);
+        properties.add(REGEX);
         this.properties = Collections.unmodifiableList(properties);
     }
 
@@ -179,6 +197,12 @@ public class SplitContent extends AbstractProcessor {
         } else {
             this.byteSequence.set(bytePattern.getBytes(StandardCharsets.UTF_8));
         }
+
+        final String regex = context.getProperty(REGEX).getValue();
+        final Pattern pattern = Pattern.compile(regex);
+
+        this.regex.set(regex);
+        this.regexPattern.set(pattern);
     }
 
     @Override
@@ -222,31 +246,54 @@ public class SplitContent extends AbstractProcessor {
                 long startOffset = 0L;
 
                 try (final InputStream in = new BufferedInputStream(rawIn)) {
-                    while (true) {
-                        final int nextByte = in.read();
-                        if (nextByte == -1) {
-                            return;
-                        }
-
-                        bytesRead++;
-                        boolean matched = buffer.addAndCompare((byte) (nextByte & 0xFF));
-                        if (matched) {
+                    if (regex != null) {
+                        // inefficient: allocate new array every time, copy to array, then copy to string
+                        // assume a maximum line size of 1024
+                        final InputStreamReader reader = new InputStreamReader(in);
+                        final char[] buf = new char[1024];
+                        final int numRead = reader.read(buf, 0, 1024);
+                        final Pattern p = regexPattern.get();
+                        final String s = String.valueOf(buf, 0, numRead);
+                        final Matcher m = p.matcher(s);
+                        if (m.find()) {
+                            bytesRead = m.end();
                             long splitLength;
 
+                            // todo : got until here. 
                             if (keepTrailingSequence) {
                                 splitLength = bytesRead - startOffset;
                             } else {
                                 splitLength = bytesRead - startOffset - byteSequence.length;
                             }
 
-                            if (keepLeadingSequence && startOffset > 0) {
-                                splitLength += byteSequence.length;
+                        }
+                    } else {
+                        while (true) {
+                            final int nextByte = in.read();
+                            if (nextByte == -1) {
+                                return;
                             }
 
-                            final long splitStart = (keepLeadingSequence && startOffset > 0) ? startOffset - byteSequence.length : startOffset;
-                            splits.add(new Tuple<>(splitStart, splitLength));
-                            startOffset = bytesRead;
-                            buffer.clear();
+                            bytesRead++;
+                            boolean matched = buffer.addAndCompare((byte) (nextByte & 0xFF));
+                            if (matched) {
+                                long splitLength;
+
+                                if (keepTrailingSequence) {
+                                    splitLength = bytesRead - startOffset;
+                                } else {
+                                    splitLength = bytesRead - startOffset - byteSequence.length;
+                                }
+
+                                if (keepLeadingSequence && startOffset > 0) {
+                                    splitLength += byteSequence.length;
+                                }
+
+                                final long splitStart = (keepLeadingSequence && startOffset > 0) ? startOffset - byteSequence.length : startOffset;
+                                splits.add(new Tuple<>(splitStart, splitLength));
+                                startOffset = bytesRead;
+                                buffer.clear();
+                            }
                         }
                     }
                 }
