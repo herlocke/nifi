@@ -17,6 +17,7 @@
 package org.apache.nifi.processors.standard;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.nifi.util.MockFlowFile;
@@ -370,5 +371,125 @@ public class TestSplitContent {
 
         final List<MockFlowFile> packed = mergeRunner.getFlowFilesForRelationship(MergeContent.REL_MERGED);
         packed.get(0).assertContentEquals(new byte[]{1, 2, 3, 4, 5, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 5, 4, 3, 2, 1});
+    }
+
+    @Test
+    public void testWithSingleRegexSplit() throws IOException {
+        final TestRunner runner = TestRunners.newTestRunner(new SplitContent());
+        runner.setProperty(SplitContent.KEEP_SEQUENCE, "true");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE.getName(), "FF");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE_LOCATION, SplitContent.LEADING_POSITION);
+        // \S\S\S [ \d]{2} \d\d:\d\d:\d\d
+        runner.setProperty(SplitContent.REGEX, "\\S\\S\\S [ \\d]{2} \\d\\d:\\d\\d:\\d\\d");
+
+        String data = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n" +
+                "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: Configuration Notice:\n" +
+                "        ASL Module \"com.apple.AccountPolicyHelper\" claims selected messages.\n" +
+                "        Those messages may not appear in standard system log files or in the ASL database.";
+
+        runner.enqueue(data);
+        runner.run();
+
+        runner.assertTransferCount(SplitContent.REL_ORIGINAL, 1);
+        runner.getFlowFilesForRelationship(SplitContent.REL_ORIGINAL).get(0).assertAttributeEquals(FRAGMENT_COUNT, "2");
+        runner.assertTransferCount(SplitContent.REL_SPLITS, 2);
+
+        runner.assertQueueEmpty();
+        final List<MockFlowFile> splits = runner.getFlowFilesForRelationship(SplitContent.REL_SPLITS);
+        final MockFlowFile split1 = splits.get(0);
+        final MockFlowFile split2 = splits.get(1);
+
+        String expectedSplit1 = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+        String expectedSplit2 = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: Configuration Notice:\n" +
+                "        ASL Module \"com.apple.AccountPolicyHelper\" claims selected messages.\n" +
+                "        Those messages may not appear in standard system log files or in the ASL database.";
+        split1.assertContentEquals(expectedSplit1);
+        split2.assertContentEquals(expectedSplit2);
+    }
+
+    @Test
+    public void testWithRegexTwoMessageSplit() throws IOException {
+        final TestRunner runner = TestRunners.newTestRunner(new SplitContent());
+        runner.setProperty(SplitContent.KEEP_SEQUENCE, "true");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE.getName(), "FF");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE_LOCATION, SplitContent.LEADING_POSITION);
+        // \S\S\S [ \d]{2} \d\d:\d\d:\d\d
+        runner.setProperty(SplitContent.REGEX, "\\S\\S\\S [ \\d]{2} \\d\\d:\\d\\d:\\d\\d");
+
+        String data = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n" +
+                "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: Configuration Notice:\n" +
+                "        ASL Module \"com.apple.AccountPolicyHelper\" claims selected messages.\n" +
+                "        Those messages may not appear in standard system log files or in the ASL database.";
+
+        runner.enqueue(data);
+        runner.run();
+
+        runner.assertTransferCount(SplitContent.REL_ORIGINAL, 1);
+        runner.getFlowFilesForRelationship(SplitContent.REL_ORIGINAL).get(0).assertAttributeEquals(FRAGMENT_COUNT, "2");
+        runner.assertTransferCount(SplitContent.REL_SPLITS, 2);
+
+        runner.assertQueueEmpty();
+        final List<MockFlowFile> splits = runner.getFlowFilesForRelationship(SplitContent.REL_SPLITS);
+        final MockFlowFile split1 = splits.get(0);
+        final MockFlowFile split2 = splits.get(1);
+
+        String expectedSplit1 = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+        String expectedSplit2 = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: Configuration Notice:\n" +
+                "        ASL Module \"com.apple.AccountPolicyHelper\" claims selected messages.\n" +
+                "        Those messages may not appear in standard system log files or in the ASL database.";
+        split1.assertContentEquals(expectedSplit1);
+        split2.assertContentEquals(expectedSplit2);
+    }
+
+    @Test
+    public void testWithRegexOneMessage() throws IOException {
+        final TestRunner runner = TestRunners.newTestRunner(new SplitContent());
+        runner.setProperty(SplitContent.KEEP_SEQUENCE, "true");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE.getName(), "FF");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE_LOCATION, SplitContent.LEADING_POSITION);
+        // \S\S\S [ \d]{2} \d\d:\d\d:\d\d
+        runner.setProperty(SplitContent.REGEX, "\\S\\S\\S [ \\d]{2} \\d\\d:\\d\\d:\\d\\d");
+
+        String data = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+
+        runner.enqueue(data);
+        runner.run();
+
+        runner.assertTransferCount(SplitContent.REL_ORIGINAL, 1);
+        runner.getFlowFilesForRelationship(SplitContent.REL_ORIGINAL).get(0).assertAttributeEquals(FRAGMENT_COUNT, "1");
+        runner.assertTransferCount(SplitContent.REL_SPLITS, 1);
+
+        runner.assertQueueEmpty();
+        final List<MockFlowFile> splits = runner.getFlowFilesForRelationship(SplitContent.REL_SPLITS);
+        final MockFlowFile split1 = splits.get(0);
+
+        String expectedSplit1 = "Sep  6 00:14:21 Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+        split1.assertContentEquals(expectedSplit1);
+    }
+
+    @Test
+    public void testWithRegexNoMatch() throws IOException {
+        final TestRunner runner = TestRunners.newTestRunner(new SplitContent());
+        runner.setProperty(SplitContent.KEEP_SEQUENCE, "true");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE.getName(), "FF");
+        runner.setProperty(SplitContent.BYTE_SEQUENCE_LOCATION, SplitContent.LEADING_POSITION);
+        // \S\S\S [ \d]{2} \d\d:\d\d:\d\d
+        runner.setProperty(SplitContent.REGEX, "\\S\\S\\S [ \\d]{2} \\d\\d:\\d\\d:\\d\\d");
+
+        String data = "Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+
+        runner.enqueue(data);
+        runner.run();
+
+        runner.assertTransferCount(SplitContent.REL_ORIGINAL, 1);
+        runner.getFlowFilesForRelationship(SplitContent.REL_ORIGINAL).get(0).assertAttributeEquals(FRAGMENT_COUNT, "1");
+        runner.assertTransferCount(SplitContent.REL_SPLITS, 1);
+
+        runner.assertQueueEmpty();
+        final List<MockFlowFile> splits = runner.getFlowFilesForRelationship(SplitContent.REL_SPLITS);
+        final MockFlowFile split1 = splits.get(0);
+
+        String expectedSplit1 = "Jons-MacBook-Pro syslogd[54]: ASL Sender Statistics\n";
+        split1.assertContentEquals(expectedSplit1);
     }
 }
